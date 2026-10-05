@@ -1,69 +1,69 @@
 LIBRARY sppc
 EXPORTS
-  SLCallServer
-  SLClose
-  SLConsumeRight
-  SLDepositMigrationBlob
-  SLDepositOfflineConfirmationId
-  SLDepositOfflineConfirmationIdEx
-  SLDepositStoreToken
-  SLFireEvent
-  SLGatherMigrationBlob
-  SLGatherMigrationBlobEx
-  SLGenerateOfflineInstallationId
-  SLGenerateOfflineInstallationIdEx
-  SLGetActiveLicenseInfo
-  SLGetApplicationInformation
-  SLGetApplicationPolicy
-  SLGetAuthenticationResult
-  SLGetEncryptedPIDEx
-  SLGetGenuineInformation
-  SLGetInstalledProductKeyIds
-  SLGetLicense
-  SLGetLicenseFileId
-  SLGetLicenseInformation
-  SLGetLicensingStatusInformation
-  SLGetPKeyId
-  SLGetPKeyInformation
-  SLGetPolicyInformation
-  SLGetPolicyInformationDWORD
-  SLGetProductSkuInformation
-  SLGetServiceInformation
-  SLGetSLIDList
-  SLInstallLicense
-  SLInstallProofOfPurchase
-  SLInstallProofOfPurchaseEx
-  SLIsGenuineLocalEx
-  SLLoadApplicationPolicies
-  SLOpen
-  SLpAuthenticateGenuineTicketResponse
-  SLpBeginGenuineTicketTransaction
-  SLpClearActivationInProgress
-  SLpDepositDownlevelGenuineTicket
-  SLpDepositTokenActivationResponse
-  SLPersistApplicationPolicies
-  SLPersistRTSPayloadOverride
-  SLpGenerateTokenActivationChallenge
-  SLpGetGenuineBlob
-  SLpGetGenuineLocal
-  SLpGetLicenseAcquisitionInfo
-  SLpGetMachineUGUID
-  SLpGetMSPidInformation
-  SLpGetTokenActivationGrantInfo
-  SLpIAActivateProduct
-  SLpIsCurrentInstalledProductKeyDefaultKey
-  SLpProcessVMPipeMessage
-  SLpSetActivationInProgress
-  SLpTriggerServiceWorker
-  SLpVLActivateProduct
-  SLReArm
-  SLRegisterEvent
-  SLRegisterPlugin
-  SLSetAuthenticationData
-  SLSetCurrentProductKey
-  SLSetGenuineInformation
-  SLUninstallLicense
-  SLUninstallProofOfPurchase
-  SLUnloadApplicationPolicies
-  SLUnregisterEvent
-  SLUnregisterPlugin
+  SLCallServer @1
+  SLpAuthenticateGenuineTicketResponse @2
+  SLpBeginGenuineTicketTransaction @3
+  SLpClearActivationInProgress @4
+  SLpDepositDownlevelGenuineTicket @5
+  SLpDepositTokenActivationResponse @6
+  SLpGenerateTokenActivationChallenge @7
+  SLpGetGenuineBlob @8
+  SLpGetGenuineLocal @9
+  SLpGetLicenseAcquisitionInfo @10
+  SLpGetMSPidInformation @11
+  SLpGetMachineUGUID @12
+  SLpGetTokenActivationGrantInfo @13
+  SLpIAActivateProduct @14
+  SLpIsCurrentInstalledProductKeyDefaultKey @15
+  SLpProcessVMPipeMessage @16
+  SLpSetActivationInProgress @17
+  SLpTriggerServiceWorker @18
+  SLpVLActivateProduct @19
+  SLClose @20
+  SLConsumeRight @21
+  SLDepositMigrationBlob @22
+  SLDepositOfflineConfirmationId @23
+  SLDepositOfflineConfirmationIdEx @24
+  SLDepositStoreToken @25
+  SLFireEvent @26
+  SLGatherMigrationBlob @27
+  SLGatherMigrationBlobEx @28
+  SLGenerateOfflineInstallationId @29
+  SLGenerateOfflineInstallationIdEx @30
+  SLGetActiveLicenseInfo @31
+  SLGetApplicationInformation @32
+  SLGetApplicationPolicy @33
+  SLGetAuthenticationResult @34
+  SLGetEncryptedPIDEx @35
+  SLGetGenuineInformation @36
+  SLGetInstalledProductKeyIds @37
+  SLGetLicense @38
+  SLGetLicenseFileId @39
+  SLGetLicenseInformation @40
+  SLGetLicensingStatusInformation @41
+  SLGetPKeyId @42
+  SLGetPKeyInformation @43
+  SLGetPolicyInformation @44
+  SLGetPolicyInformationDWORD @45
+  SLGetProductSkuInformation @46
+  SLGetSLIDList @47
+  SLGetServiceInformation @48
+  SLInstallLicense @49
+  SLInstallProofOfPurchase @50
+  SLInstallProofOfPurchaseEx @51
+  SLIsGenuineLocalEx @52
+  SLLoadApplicationPolicies @53
+  SLOpen @54
+  SLPersistApplicationPolicies @55
+  SLPersistRTSPayloadOverride @56
+  SLReArm @57
+  SLRegisterEvent @58
+  SLRegisterPlugin @59
+  SLSetAuthenticationData @60
+  SLSetCurrentProductKey @61
+  SLSetGenuineInformation @62
+  SLUninstallLicense @63
+  SLUninstallProofOfPurchase @64
+  SLUnloadApplicationPolicies @65
+  SLUnregisterEvent @66
+  SLUnregisterPlugin @67

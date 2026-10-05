@@ -25,4 +25,11 @@ Findings:
 - Run all apps in one Wine session. A second `umu-run` on the same prefix cannot reach the first one's wineserver (separate container `/tmp`) and hangs. The lab keeps one session open with a job queue (`session.sh`).
 - Word still offers safe mode on first start even after the `Resiliency` keys are deleted. Answering No starts it normally.
 
-Status: Word opens. Other apps need a re-check with the import fix. Sign-in not checked. Teams not attempted (new Teams is a Store/WebView2 app).
+- Excel dies at startup with a missing `CLSID_CUIAutomationRegistrar` (`0x80040111` from `uiautomationcore`). `shims/uiautomationcore` forwards to a renamed copy of Wine's (`uiautomationcorew.dll`) and serves that class.
+- Excel then dies after Wine's `d2d_device_context_CreateSvgDocument ... stub!`. Office's new UI draws SVG through `ID2D1DeviceContext5`. `shims/d2d1` forwards to a renamed copy (`d2d1w.dll`) and hides `ID2D1DeviceContext5/6` from `QueryInterface` on device contexts, so Office takes its non-SVG path. It also keeps an empty SVG document as a fallback, but Office calls `GetRoot()` on it and fails, so hiding the interface is what works. Wine's Direct2D objects share method tables, so the shim swaps table entries from `D2D1CreateFactory` / `D2D1CreateDevice` / `D2D1CreateDeviceContext`.
+- Forwarder DLLs must keep Wine's export ordinals: Office imports some `d2d1` functions by ordinal. `shims/gen-def.sh` writes the `.def` files from Wine's export table. A `.def` numbered alphabetically calls the wrong functions and crashes inside `d2d1`.
+- The shims import only `kernel32` and the C runtime (build with `-static`; a `libwinpthread-1.dll` import stops the DLL from loading).
+- The second copy of a DLL (`ole32w`, `uiautomationcorew`, `d2d1w`) is copied from the runner at install time and is not shipped here. A renamed copy of `kernel32` does not initialise, so `kernel32` is not shimmed.
+- winetricks has no WebView2 verb. Microsoft's WebView2 runtime would have to come from Microsoft's own installer.
+
+Status: Word and Excel start and stay open with all four shims. Excel draws only part of its UI; being worked on. Sign-in not checked. Teams not attempted.
