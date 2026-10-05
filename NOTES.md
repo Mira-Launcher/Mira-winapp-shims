@@ -16,4 +16,9 @@ Findings:
 - `setup.exe /configure` never exits after the files are installed. Treat the install as done when the licenses are installed and `Office16\WINWORD.EXE` exists, and kill the installer.
 - Word fails with `0x6ba` (`RPC_S_SERVER_UNAVAILABLE`) when the Click-to-Run service is not running. Run `net start ClickToRunSvc` in the same session, wait a few seconds, then start Word.
 
-Status: Word stays running for 80+ seconds. Window and sign-in screen not yet checked by eye. Excel, PowerPoint and Outlook not yet tried.
+- Outlook says `ole32.dll` is incompatible: Wine's `ole32` lacks `CoRegisterActivationFilter`, which Office's `Mso30win32client.dll` looks for. `shims/ole32` forwards every export to a renamed copy of Wine's own `ole32` (`ole32w.dll`, copied from the runner at install time, never shipped) and adds that function. Regenerate the forwarder list with `shims/ole32/gen-def.sh <wine ole32.dll>`.
+- Each Office app writes `HKCU\Software\Microsoft\Office\16.0\<App>\Resiliency` on start and removes it on a clean exit. After a forced stop Office offers safe mode. Delete those keys before every launch.
+- After `net start ClickToRunSvc`, wait about 25 seconds before starting an app. Starting sooner fails with `6ba` and the "couldn't start last time" dialog.
+- Dialog text is readable headless: Office reports it through `ReportEventW` (`WINEDEBUG=err+all`).
+
+Status: Word, Excel, PowerPoint, Outlook and OneNote each stay running when started alone in one shared prefix. Sign-in screens not checked by eye. Teams not attempted (new Teams is a Store/WebView2 app).
