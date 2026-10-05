@@ -21,4 +21,8 @@ Findings:
 - After `net start ClickToRunSvc`, wait about 25 seconds before starting an app. Starting sooner fails with `6ba` and the "couldn't start last time" dialog.
 - Dialog text is readable headless: Office reports it through `ReportEventW` (`WINEDEBUG=err+all`).
 
-Status: Word, Excel, PowerPoint, Outlook and OneNote each stay running when started alone in one shared prefix. Sign-in screens not checked by eye. Teams not attempted (new Teams is a Store/WebView2 app).
+- Word dies right after the splash: Office's `MSO.DLL` imports `KERNEL32!SetFileShortNameW`, which Wine lacks. Wine fills the import with a stub that aborts when called (`unimplemented function KERNEL32.dll.SetFileShortNameW`). `shims/ole32/importfix.c` repoints that import slot to a function that fails with `ERROR_NOT_SUPPORTED`. It runs from the `ole32` shim's `DllMain`, so it applies to every Office app, and it also watches DLLs loaded later. Replacing `kernel32` with a forwarder does not work: Wine refuses to initialise a renamed second copy (`process_attach failed for forward 'kernel32w.CtrlRoutine'`).
+- Run all apps in one Wine session. A second `umu-run` on the same prefix cannot reach the first one's wineserver (separate container `/tmp`) and hangs. The lab keeps one session open with a job queue (`session.sh`).
+- Word still offers safe mode on first start even after the `Resiliency` keys are deleted. Answering No starts it normally.
+
+Status: Word opens. Other apps need a re-check with the import fix. Sign-in not checked. Teams not attempted (new Teams is a Store/WebView2 app).

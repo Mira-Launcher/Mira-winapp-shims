@@ -2,9 +2,14 @@
  * and adds CoRegisterActivationFilter, which Wine lacks and Office's
  * Mso30win32client.dll looks for.
  *
+ * importfix.c also runs from here: it keeps Wine's stub for SetFileShortNameW from
+ * aborting Office (see that file).
+ *
  * The filter is only remembered, never called. Nothing in Wine activates objects
  * through it, so Office gets the answer it expects and behaves as before. */
 #include <windows.h>
+
+void ImportFixInstall(void);
 
 static IUnknown *g_filter;
 
@@ -18,6 +23,9 @@ HRESULT WINAPI CoRegisterActivationFilter(IUnknown *filter) {
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved) {
   (void)reserved;
-  if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(inst);
+  if (reason == DLL_PROCESS_ATTACH) {
+    DisableThreadLibraryCalls(inst);
+    ImportFixInstall();
+  }
   return TRUE;
 }

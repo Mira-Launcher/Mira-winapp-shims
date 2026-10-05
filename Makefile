@@ -8,9 +8,9 @@ $(OUT)/sppc.dll: shims/sppc/sppc.c shims/sppc/sppc.def
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ shims/sppc/sppc.c shims/sppc/sppc.def -nostdlib -lkernel32 -luser32 -Wl,--entry=DllMain
 
-$(OUT)/ole32.dll: shims/ole32/ole32.c shims/ole32/ole32.def
+$(OUT)/ole32.dll: shims/ole32/ole32.c shims/ole32/importfix.c shims/ole32/ole32.def
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -shared -o $@ shims/ole32/ole32.c shims/ole32/ole32.def -nostdlib -lkernel32 -Wl,--entry=DllMain
+	$(CC) $(CFLAGS) -shared -o $@ shims/ole32/ole32.c shims/ole32/importfix.c shims/ole32/ole32.def -nostdlib -lkernel32 -lntdll -Wl,--entry=DllMain
 
 clean:
 	rm -rf $(OUT)
