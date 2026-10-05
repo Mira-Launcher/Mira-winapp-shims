@@ -32,4 +32,7 @@ Findings:
 - The second copy of a DLL (`ole32w`, `uiautomationcorew`, `d2d1w`) is copied from the runner at install time and is not shipped here. A renamed copy of `kernel32` does not initialise, so `kernel32` is not shimmed.
 - winetricks has no WebView2 verb. Microsoft's WebView2 runtime would have to come from Microsoft's own installer.
 
-Status: Word and Excel start and stay open with all four shims. Excel draws only part of its UI; being worked on. Sign-in not checked. Teams not attempted.
+- WebView2: Microsoft's standalone runtime installer (`https://go.microsoft.com/fwlink/?linkid=2124701`, signed by Microsoft Corporation) installs in the prefix (`/silent /install`, runtime 154). With `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--no-sandbox` set in `HKCU\Environment`, Excel loads `WebView2Loader.dll` and `EmbeddedBrowserWebView.dll` but never starts `msedgewebview2.exe`. The sign-in button and Office's web-hosted panels ("Feedback to Microsoft: This feature could not be started") still do not work. Not solved.
+- Excel's first-run window ("Sign in to get started with Excel") draws, but the sign-in button has no label and clicking it does nothing.
+
+Status: Word and Excel start and stay open with all four shims. Excel shows its sign-in screen and, past it, its UI. Sign-in does not work yet (WebView2). Teams not attempted.
