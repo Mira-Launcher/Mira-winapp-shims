@@ -3,7 +3,7 @@ CXX := x86_64-w64-mingw32-g++
 CFLAGS := -O2 -Wall -Wextra -Wno-cast-function-type
 OUT := build
 
-all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll
+all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll $(OUT)/qmgr.dll
 
 $(OUT)/sppc.dll: shims/sppc/sppc.c shims/sppc/sppc.def
 	mkdir -p $(OUT)
@@ -24,6 +24,10 @@ $(OUT)/d2d1.dll: shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def
 $(OUT)/xmllite.dll: shims/xmllite/xmllite.c shims/xmllite/xmllite.def
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ shims/xmllite/xmllite.c shims/xmllite/xmllite.def -nostdlib -lkernel32 -Wl,--entry=DllMain
+
+$(OUT)/qmgr.dll: shims/qmgr/qmgr.cpp shims/qmgr/qmgr.def
+	mkdir -p $(OUT)
+	$(CXX) -O2 -Wall -Wextra -Wno-cast-function-type -fno-exceptions -fno-rtti -shared -static -o $@ shims/qmgr/qmgr.cpp shims/qmgr/qmgr.def -lwinhttp -lole32 -luuid -ladvapi32 -lkernel32 -Wl,--entry=DllMain
 
 clean:
 	rm -rf $(OUT)
