@@ -251,6 +251,147 @@ static void STDMETHODCALLTYPE ContextPushClip(void *context, const D2D1_RECT_F *
   g_orig_set_transform(context, &saved);
 }
 
+/* Command lists. Office records some drawing into an ID2D1CommandList and
+ * then draws the list onto the real target. Wine records the commands but
+ * fails EndDraw on a command-list target, and its DrawImage only draws
+ * bitmaps, so the recording is lost and the area stays empty. EndDraw on a
+ * command list succeeds here, and DrawImage of a command list replays it
+ * through ID2D1CommandList::Stream into a sink that forwards every command to
+ * the target, offset by the image position and clipped to the image rect. */
+class ReplaySink final : public ID2D1CommandSink {
+ public:
+  ReplaySink(ID2D1DeviceContext *target, const D2D1_MATRIX_3X2_F &base) : target_(target), base_(base) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(ID2D1CommandSink)) {
+      *out = static_cast<ID2D1CommandSink *>(this);
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+
+  HRESULT STDMETHODCALLTYPE BeginDraw() override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE EndDraw() override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetAntialiasMode(D2D1_ANTIALIAS_MODE mode) override { target_->SetAntialiasMode(mode); return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetTags(D2D1_TAG tag1, D2D1_TAG tag2) override { target_->SetTags(tag1, tag2); return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE mode) override { target_->SetTextAntialiasMode(mode); return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetTextRenderingParams(IDWriteRenderingParams *params) override { target_->SetTextRenderingParams(params); return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetTransform(const D2D1_MATRIX_3X2_F *transform) override {
+    D2D1::Matrix3x2F combined = *D2D1::Matrix3x2F::ReinterpretBaseType(transform) * *D2D1::Matrix3x2F::ReinterpretBaseType(&base_);
+    target_->SetTransform(combined);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND blend) override { target_->SetPrimitiveBlend(blend); return S_OK; }
+  HRESULT STDMETHODCALLTYPE SetUnitMode(D2D1_UNIT_MODE mode) override { target_->SetUnitMode(mode); return S_OK; }
+  HRESULT STDMETHODCALLTYPE Clear(const D2D1_COLOR_F *color) override {
+    (void)color; /* clearing the whole target would wipe more than the image; recordings start transparent */
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawGlyphRun(D2D1_POINT_2F origin, const DWRITE_GLYPH_RUN *run, const DWRITE_GLYPH_RUN_DESCRIPTION *desc,
+                                         ID2D1Brush *brush, DWRITE_MEASURING_MODE mode) override {
+    target_->DrawGlyphRun(origin, run, desc, brush, mode);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawLine(D2D1_POINT_2F p0, D2D1_POINT_2F p1, ID2D1Brush *brush, FLOAT width, ID2D1StrokeStyle *style) override {
+    target_->DrawLine(p0, p1, brush, width, style);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawGeometry(ID2D1Geometry *geometry, ID2D1Brush *brush, FLOAT width, ID2D1StrokeStyle *style) override {
+    target_->DrawGeometry(geometry, brush, width, style);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawRectangle(const D2D1_RECT_F *rect, ID2D1Brush *brush, FLOAT width, ID2D1StrokeStyle *style) override {
+    target_->DrawRectangle(rect, brush, width, style);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawBitmap(ID2D1Bitmap *bitmap, const D2D1_RECT_F *dst, FLOAT opacity, D2D1_INTERPOLATION_MODE mode,
+                                       const D2D1_RECT_F *src, const D2D1_MATRIX_4X4_F *perspective) override {
+    target_->DrawBitmap(bitmap, dst, opacity, mode, src, perspective);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawImage(ID2D1Image *image, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
+                                      D2D1_INTERPOLATION_MODE mode, D2D1_COMPOSITE_MODE composite) override {
+    target_->DrawImage(image, offset, rect, mode, composite);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DrawGdiMetafile(ID2D1GdiMetafile *metafile, const D2D1_POINT_2F *offset) override {
+    target_->DrawGdiMetafile(metafile, offset);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE FillMesh(ID2D1Mesh *mesh, ID2D1Brush *brush) override { target_->FillMesh(mesh, brush); return S_OK; }
+  HRESULT STDMETHODCALLTYPE FillOpacityMask(ID2D1Bitmap *mask, ID2D1Brush *brush, const D2D1_RECT_F *dst, const D2D1_RECT_F *src) override {
+    target_->FillOpacityMask(mask, brush, dst, src);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE FillGeometry(ID2D1Geometry *geometry, ID2D1Brush *brush, ID2D1Brush *opacity) override {
+    target_->FillGeometry(geometry, brush, opacity);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE FillRectangle(const D2D1_RECT_F *rect, ID2D1Brush *brush) override { target_->FillRectangle(rect, brush); return S_OK; }
+  HRESULT STDMETHODCALLTYPE PushAxisAlignedClip(const D2D1_RECT_F *rect, D2D1_ANTIALIAS_MODE mode) override {
+    target_->PushAxisAlignedClip(rect, mode);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE PushLayer(const D2D1_LAYER_PARAMETERS1 *params, ID2D1Layer *layer) override {
+    target_->PushLayer(params, layer);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE PopAxisAlignedClip() override { target_->PopAxisAlignedClip(); return S_OK; }
+  HRESULT STDMETHODCALLTYPE PopLayer() override { target_->PopLayer(); return S_OK; }
+
+ private:
+  ID2D1DeviceContext *target_;
+  D2D1_MATRIX_3X2_F base_;
+};
+
+static HRESULT(STDMETHODCALLTYPE *g_orig_end_draw)(void *, D2D1_TAG *, D2D1_TAG *);
+static void(STDMETHODCALLTYPE *g_orig_draw_image)(void *, ID2D1Image *, const D2D1_POINT_2F *, const D2D1_RECT_F *, D2D1_INTERPOLATION_MODE,
+                                                  D2D1_COMPOSITE_MODE);
+
+static bool TargetIsCommandList(ID2D1DeviceContext *context) {
+  ID2D1Image *target = nullptr;
+  context->GetTarget(&target);
+  if (!target) return false;
+  ID2D1CommandList *list = nullptr;
+  bool is_list = SUCCEEDED(target->QueryInterface(__uuidof(ID2D1CommandList), reinterpret_cast<void **>(&list)));
+  if (list) list->Release();
+  target->Release();
+  return is_list;
+}
+
+static HRESULT STDMETHODCALLTYPE ContextEndDraw(void *self, D2D1_TAG *tag1, D2D1_TAG *tag2) {
+  if (TargetIsCommandList(static_cast<ID2D1DeviceContext *>(self))) {
+    if (tag1) *tag1 = 0;
+    if (tag2) *tag2 = 0;
+    return S_OK;
+  }
+  return g_orig_end_draw(self, tag1, tag2);
+}
+
+static void STDMETHODCALLTYPE ContextDrawImage(void *self, ID2D1Image *image, const D2D1_POINT_2F *offset, const D2D1_RECT_F *rect,
+                                               D2D1_INTERPOLATION_MODE mode, D2D1_COMPOSITE_MODE composite) {
+  auto *context = static_cast<ID2D1DeviceContext *>(self);
+  ID2D1CommandList *list = nullptr;
+  if (!image || TargetIsCommandList(context) ||
+      FAILED(image->QueryInterface(__uuidof(ID2D1CommandList), reinterpret_cast<void **>(&list))))
+    return g_orig_draw_image(self, image, offset, rect, mode, composite);
+
+  D2D1_MATRIX_3X2_F saved;
+  context->GetTransform(&saved);
+  D2D1::Matrix3x2F base = D2D1::Matrix3x2F::Translation(offset ? offset->x : 0.0f, offset ? offset->y : 0.0f) *
+                          *D2D1::Matrix3x2F::ReinterpretBaseType(&saved);
+  context->SetTransform(base);
+  if (rect) context->PushAxisAlignedClip(rect, D2D1_ANTIALIAS_MODE_ALIASED);
+  ReplaySink sink(context, base);
+  list->Stream(&sink);
+  if (rect) context->PopAxisAlignedClip();
+  context->SetTransform(saved);
+  list->Release();
+}
+
 static void PatchContext(IUnknown *context) {
   if (!context) return;
   void **table = *reinterpret_cast<void ***>(context);
@@ -269,6 +410,13 @@ static void PatchContext(IUnknown *context) {
       table[SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1RenderTarget::*)(D2D1_MATRIX_3X2_F *) const>(&ID2D1RenderTarget::GetTransform))]);
   SwapSlot(table, SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1RenderTarget::*)(const D2D1_RECT_F *, D2D1_ANTIALIAS_MODE)>(&ID2D1RenderTarget::PushAxisAlignedClip)),
            reinterpret_cast<void *>(ContextPushClip), reinterpret_cast<void **>(&g_orig_push_clip));
+
+  SwapSlot(table, SlotOf(static_cast<HRESULT (STDMETHODCALLTYPE ID2D1RenderTarget::*)(D2D1_TAG *, D2D1_TAG *)>(&ID2D1RenderTarget::EndDraw)),
+           reinterpret_cast<void *>(ContextEndDraw), reinterpret_cast<void **>(&g_orig_end_draw));
+  SwapSlot(table,
+           SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1DeviceContext::*)(ID2D1Image *, const D2D1_POINT_2F *, const D2D1_RECT_F *,
+                                                                              D2D1_INTERPOLATION_MODE, D2D1_COMPOSITE_MODE)>(&ID2D1DeviceContext::DrawImage)),
+           reinterpret_cast<void *>(ContextDrawImage), reinterpret_cast<void **>(&g_orig_draw_image));
 
   /* A new context may reuse the address of a released one. */
   EnterCriticalSection(&g_states_lock);
