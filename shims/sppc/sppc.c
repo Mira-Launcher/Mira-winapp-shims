@@ -10,6 +10,8 @@
 #include <stdio.h>
 
 #define E_NOTIMPL_ ((HRESULT)0x80004001L)
+#define SL_E_VALUE_NOT_FOUND ((HRESULT)0xC004F012L)
+#define SL_E_PRODUCT_SKU_NOT_INSTALLED ((HRESULT)0xC004F014L)
 
 static void Log(const char *name) {
   char path[MAX_PATH];
@@ -26,7 +28,6 @@ static void Log(const char *name) {
 /* All SL* functions take at most four register arguments we care about. */
 #define STUB(name) HRESULT WINAPI name(void *a, void *b, void *c, void *d) { (void)a; (void)b; (void)c; (void)d; Log(#name); return E_NOTIMPL_; }
 STUB(SLCallServer)
-STUB(SLConsumeRight)
 STUB(SLDepositMigrationBlob)
 STUB(SLDepositOfflineConfirmationId)
 STUB(SLDepositOfflineConfirmationIdEx)
@@ -46,18 +47,15 @@ STUB(SLGetInstalledProductKeyIds)
 STUB(SLGetLicense)
 STUB(SLGetLicenseFileId)
 STUB(SLGetLicenseInformation)
-STUB(SLGetLicensingStatusInformation)
 STUB(SLGetPKeyId)
 STUB(SLGetPKeyInformation)
 STUB(SLGetPolicyInformation)
 STUB(SLGetPolicyInformationDWORD)
 STUB(SLGetProductSkuInformation)
 STUB(SLGetServiceInformation)
-STUB(SLGetSLIDList)
 STUB(SLInstallProofOfPurchase)
 STUB(SLInstallProofOfPurchaseEx)
 STUB(SLIsGenuineLocalEx)
-STUB(SLLoadApplicationPolicies)
 STUB(SLpAuthenticateGenuineTicketResponse)
 STUB(SLpBeginGenuineTicketTransaction)
 STUB(SLpClearActivationInProgress)
@@ -113,6 +111,38 @@ HRESULT WINAPI SLInstallLicense(HANDLE h, UINT size, const BYTE *blob, GUID *id)
     id->Data1 = size;
   }
   return S_OK;
+}
+
+/* The calls below answer "no license on this machine" the way the real
+ * service does when nothing is installed, so Office moves on to its own
+ * subscription licensing instead of treating the service as broken. */
+HRESULT WINAPI SLGetSLIDList(HANDLE h, int query_type, const GUID *query, int return_type, UINT *count, GUID **ids) {
+  (void)h; (void)query_type; (void)query; (void)return_type;
+  Log("SLGetSLIDList");
+  if (count) *count = 0;
+  if (ids) *ids = NULL;
+  return SL_E_VALUE_NOT_FOUND;
+}
+
+HRESULT WINAPI SLGetLicensingStatusInformation(HANDLE h, const GUID *app, const GUID *sku, const WCHAR *right, UINT *count, void **status) {
+  (void)h; (void)app; (void)sku; (void)right;
+  Log("SLGetLicensingStatusInformation");
+  if (count) *count = 0;
+  if (status) *status = NULL;
+  return S_OK;
+}
+
+HRESULT WINAPI SLConsumeRight(HANDLE h, const GUID *app, const GUID *sku, const WCHAR *right, void *reserved) {
+  (void)h; (void)app; (void)sku; (void)right; (void)reserved;
+  Log("SLConsumeRight");
+  return SL_E_PRODUCT_SKU_NOT_INSTALLED;
+}
+
+HRESULT WINAPI SLLoadApplicationPolicies(const GUID *app, const GUID *sku, DWORD flags, HANDLE *context) {
+  (void)app; (void)sku; (void)flags;
+  Log("SLLoadApplicationPolicies");
+  if (context) *context = NULL;
+  return SL_E_PRODUCT_SKU_NOT_INSTALLED;
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved) {
