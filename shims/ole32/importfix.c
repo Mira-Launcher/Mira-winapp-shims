@@ -47,6 +47,16 @@ static BOOL WINAPI FailShortName(HANDLE file, LPCWSTR short_name) {
   return FALSE;
 }
 
+// Wine's stub reports success with no entries; Office then reads entry 0 unchecked.
+static DWORD WINAPI NotVirtualDisk(HANDLE obj, DWORD flags, ULONG size, void *info, ULONG *used) {
+  (void)obj;
+  (void)flags;
+  (void)size;
+  (void)info;
+  if (used) *used = 0;
+  return 0xC03A0015;  // ERROR_VIRTDISK_NOT_VIRTUAL_DISK
+}
+
 /* Places a popup of `size` at `anchor` using the TPM_* alignment flags, keeps
  * it on the anchor's monitor and moves it off `exclude` when they overlap. */
 static BOOL WINAPI PopupPosition(const POINT *anchor, const SIZE *size, UINT flags, RECT *exclude, RECT *out) {
@@ -138,6 +148,7 @@ static const struct {
 } kFixes[] = {
     {"KERNEL32.dll", "SetFileShortNameW", (void *)FailShortName},
     {"USER32.dll", "CalculatePopupWindowPosition", (void *)PopupPosition},
+    {"VirtDisk.dll", "GetStorageDependencyInformation", (void *)NotVirtualDisk},
     {"WINHTTP.dll", "WinHttpQueryOption", (void *)QueryOption},
     {"WINHTTP.dll", "WinHttpSetOption", (void *)HttpSetOption},
     {"WININET.dll", "InternetSetOptionW", (void *)InetSetOptionW},
