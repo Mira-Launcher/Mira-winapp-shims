@@ -1,8 +1,9 @@
 """Range-capable test server for the qmgr shim: byte i of /blob is (i*31)%251.
-Usage: rangesrv.py [port] [size]. GET /stats returns and resets the connection counts."""
-import http.server, socketserver, threading, sys, json, re
+Usage: rangesrv.py [port] [size] [delay]: `delay` seconds before each answer, to make a transfer last. GET /stats returns and resets the connection counts."""
+import http.server, socketserver, threading, sys, json, re, time
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
 SIZE = int(sys.argv[2]) if len(sys.argv) > 2 else 64 << 20
+DELAY = float(sys.argv[3]) if len(sys.argv) > 3 else 0.0
 lock = threading.Lock(); stats = {"conns": 0, "reqs": 0}
 PATTERN = bytes((i * 31) % 251 for i in range(251 * 4096))
 def data(start, end):
@@ -22,6 +23,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/stats"):
             with lock: body = json.dumps(stats).encode(); stats["conns"] = stats["reqs"] = 0
             self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if DELAY: time.sleep(DELAY)
         m = re.match(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
         if m:
             a = int(m.group(1)); b = min(int(m.group(2)) if m.group(2) else SIZE - 1, SIZE - 1)
