@@ -9,6 +9,8 @@
  * Better still, the context is made to deny it supports ID2D1DeviceContext5, the
  * interface that carries SVG, so Office never asks.
  *
+ * It also makes pixel unit mode work (see ContextSetUnitMode below).
+ *
  * Wine's Direct2D objects share their method tables, so the fix swaps table
  * entries in place. It starts from the three exported functions that create
  * objects, follows factory -> device -> device context, and replaces
@@ -142,11 +144,136 @@ static HRESULT STDMETHODCALLTYPE ContextQueryInterface(void *self, REFIID riid, 
   return g_orig_query(self, riid, out);
 }
 
+/* Pixel unit mode. Wine stores D2D1_UNIT_MODE_PIXELS but keeps scaling
+ * everything by dpi / 96, so at any DPI above 96 Office's symbol-font icons
+ * (formula bar, scroll bars, sheet-tab splitter) land outside their boxes and
+ * the empty rest shows black. While a context is in pixel mode, Wine's DPI is
+ * held at 96; GetDpi still reports the DPI Office set. */
+static void(STDMETHODCALLTYPE *g_orig_set_dpi)(void *, FLOAT, FLOAT);
+static void(STDMETHODCALLTYPE *g_orig_get_dpi)(void *, FLOAT *, FLOAT *);
+static void(STDMETHODCALLTYPE *g_orig_set_unit_mode)(void *, D2D1_UNIT_MODE);
+static D2D1_UNIT_MODE(STDMETHODCALLTYPE *g_orig_get_unit_mode)(void *);
+static void(STDMETHODCALLTYPE *g_orig_restore_state)(void *, ID2D1DrawingStateBlock *);
+
+struct PixelState {
+  void *context;
+  FLOAT dpi_x, dpi_y;
+  bool pixels;
+};
+static PixelState g_states[64];
+static LONG g_next_state;
+static CRITICAL_SECTION g_states_lock;
+
+/* Caller holds g_states_lock. */
+static PixelState *StateOf(void *context, bool create) {
+  for (auto &s : g_states)
+    if (s.context == context) return &s;
+  if (!create) return nullptr;
+  PixelState *s = &g_states[(g_next_state++) % 64];
+  s->context = context;
+  s->pixels = false;
+  g_orig_get_dpi(context, &s->dpi_x, &s->dpi_y);
+  return s;
+}
+
+static void ApplyUnitMode(void *context, D2D1_UNIT_MODE mode) {
+  EnterCriticalSection(&g_states_lock);
+  PixelState *s = StateOf(context, true);
+  if (mode == D2D1_UNIT_MODE_PIXELS && !s->pixels) {
+    g_orig_get_dpi(context, &s->dpi_x, &s->dpi_y);
+    s->pixels = true;
+    g_orig_set_dpi(context, 96.0f, 96.0f);
+  } else if (mode == D2D1_UNIT_MODE_DIPS && s->pixels) {
+    s->pixels = false;
+    g_orig_set_dpi(context, s->dpi_x, s->dpi_y);
+  }
+  LeaveCriticalSection(&g_states_lock);
+}
+
+static void STDMETHODCALLTYPE ContextSetDpi(void *context, FLOAT x, FLOAT y) {
+  EnterCriticalSection(&g_states_lock);
+  PixelState *s = StateOf(context, false);
+  if (s && s->pixels) {
+    s->dpi_x = x;
+    s->dpi_y = y;
+  } else {
+    if (s) {
+      s->dpi_x = x;
+      s->dpi_y = y;
+    }
+    g_orig_set_dpi(context, x, y);
+  }
+  LeaveCriticalSection(&g_states_lock);
+}
+
+static void STDMETHODCALLTYPE ContextGetDpi(void *context, FLOAT *x, FLOAT *y) {
+  EnterCriticalSection(&g_states_lock);
+  PixelState *s = StateOf(context, false);
+  if (s && s->pixels) {
+    if (x) *x = s->dpi_x;
+    if (y) *y = s->dpi_y;
+  } else {
+    g_orig_get_dpi(context, x, y);
+  }
+  LeaveCriticalSection(&g_states_lock);
+}
+
+static void STDMETHODCALLTYPE ContextSetUnitMode(void *context, D2D1_UNIT_MODE mode) {
+  g_orig_set_unit_mode(context, mode);
+  ApplyUnitMode(context, mode);
+}
+
+static void STDMETHODCALLTYPE ContextRestoreState(void *context, ID2D1DrawingStateBlock *block) {
+  g_orig_restore_state(context, block);
+  ApplyUnitMode(context, g_orig_get_unit_mode(context));
+}
+
+/* Axis-aligned clips. Wine turns the clip rectangle into pixels as
+ * transform(rect * dpi / 96), leaving the transform's translation unscaled, so
+ * at any DPI other than 96 a clip under a translated transform lands in the
+ * wrong place and clips away what is drawn (Excel's scroll bars). Hand Wine a
+ * transform whose translation is already scaled while it computes the clip. */
+static void(STDMETHODCALLTYPE *g_orig_push_clip)(void *, const D2D1_RECT_F *, D2D1_ANTIALIAS_MODE);
+static void(STDMETHODCALLTYPE *g_orig_set_transform)(void *, const D2D1_MATRIX_3X2_F *);
+static void(STDMETHODCALLTYPE *g_orig_get_transform)(void *, D2D1_MATRIX_3X2_F *);
+
+static void STDMETHODCALLTYPE ContextPushClip(void *context, const D2D1_RECT_F *rect, D2D1_ANTIALIAS_MODE mode) {
+  FLOAT dpi_x, dpi_y;
+  g_orig_get_dpi(context, &dpi_x, &dpi_y);
+  if (dpi_x == 96.0f && dpi_y == 96.0f) return g_orig_push_clip(context, rect, mode);
+  D2D1_MATRIX_3X2_F saved, scaled;
+  g_orig_get_transform(context, &saved);
+  scaled = saved;
+  scaled._31 *= dpi_x / 96.0f;
+  scaled._32 *= dpi_y / 96.0f;
+  g_orig_set_transform(context, &scaled);
+  g_orig_push_clip(context, rect, mode);
+  g_orig_set_transform(context, &saved);
+}
+
 static void PatchContext(IUnknown *context) {
   if (!context) return;
   void **table = *reinterpret_cast<void ***>(context);
   SwapSlot(table, 0, reinterpret_cast<void *>(ContextQueryInterface), reinterpret_cast<void **>(&g_orig_query));
   SwapSlot(table, SlotOf(&ID2D1DeviceContext5::CreateSvgDocument), reinterpret_cast<void *>(EmptyCreateSvgDocument), nullptr);
+
+  g_orig_get_unit_mode = reinterpret_cast<decltype(g_orig_get_unit_mode)>(table[SlotOf(&ID2D1DeviceContext::GetUnitMode)]);
+  SwapSlot(table, SlotOf(&ID2D1RenderTarget::SetDpi), reinterpret_cast<void *>(ContextSetDpi), reinterpret_cast<void **>(&g_orig_set_dpi));
+  SwapSlot(table, SlotOf(&ID2D1RenderTarget::GetDpi), reinterpret_cast<void *>(ContextGetDpi), reinterpret_cast<void **>(&g_orig_get_dpi));
+  SwapSlot(table, SlotOf(&ID2D1DeviceContext::SetUnitMode), reinterpret_cast<void *>(ContextSetUnitMode), reinterpret_cast<void **>(&g_orig_set_unit_mode));
+  SwapSlot(table, SlotOf(&ID2D1RenderTarget::RestoreDrawingState), reinterpret_cast<void *>(ContextRestoreState), reinterpret_cast<void **>(&g_orig_restore_state));
+
+  g_orig_set_transform = reinterpret_cast<decltype(g_orig_set_transform)>(
+      table[SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1RenderTarget::*)(const D2D1_MATRIX_3X2_F *)>(&ID2D1RenderTarget::SetTransform))]);
+  g_orig_get_transform = reinterpret_cast<decltype(g_orig_get_transform)>(
+      table[SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1RenderTarget::*)(D2D1_MATRIX_3X2_F *) const>(&ID2D1RenderTarget::GetTransform))]);
+  SwapSlot(table, SlotOf(static_cast<void (STDMETHODCALLTYPE ID2D1RenderTarget::*)(const D2D1_RECT_F *, D2D1_ANTIALIAS_MODE)>(&ID2D1RenderTarget::PushAxisAlignedClip)),
+           reinterpret_cast<void *>(ContextPushClip), reinterpret_cast<void **>(&g_orig_push_clip));
+
+  /* A new context may reuse the address of a released one. */
+  EnterCriticalSection(&g_states_lock);
+  if (PixelState *s = StateOf(context, false)) s->context = nullptr;
+  LeaveCriticalSection(&g_states_lock);
 }
 
 /* One hook per overload of Device::CreateDeviceContext; N picks the slot and
@@ -196,7 +323,94 @@ static void PatchDevice(IUnknown *device) {
   HOOK_CONTEXT(6, ID2D1Device6, ID2D1DeviceContext6)
 }
 
-#define HOOK_DEVICE(N, FACTORY, DEVICE)                                                                                           \
+/* Rectangle CombineWithGeometry. Wine's is a stub that fails, and Office works
+ * out the area it repaints as a rectangle minus another shape, so parts of the
+ * window stay unpainted (black) until hovering redraws them another way.
+ * Rectangle against an axis-aligned rectangle is computed exactly; any other
+ * shape is written as an even-odd pair of outlines, which is exact when the
+ * shape lies inside the rectangle, the case Office uses. */
+static HRESULT(STDMETHODCALLTYPE *g_orig_create_rect)(void *, const D2D1_RECT_F *, ID2D1RectangleGeometry **);
+
+static FLOAT Lo(FLOAT a, FLOAT b) { return a < b ? a : b; }
+static FLOAT Hi(FLOAT a, FLOAT b) { return a > b ? a : b; }
+
+static void AddRect(ID2D1SimplifiedGeometrySink *sink, const D2D1_RECT_F &r) {
+  if (r.right <= r.left || r.bottom <= r.top) return;
+  D2D1_POINT_2F points[3] = {{r.right, r.top}, {r.right, r.bottom}, {r.left, r.bottom}};
+  sink->BeginFigure(D2D1::Point2F(r.left, r.top), D2D1_FIGURE_BEGIN_FILLED);
+  sink->AddLines(points, 3);
+  sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+}
+
+/* a minus b, as up to four rectangles. */
+static void AddDifference(ID2D1SimplifiedGeometrySink *sink, const D2D1_RECT_F &a, const D2D1_RECT_F &b) {
+  D2D1_RECT_F i = D2D1::RectF(Hi(a.left, b.left), Hi(a.top, b.top), Lo(a.right, b.right), Lo(a.bottom, b.bottom));
+  if (i.right <= i.left || i.bottom <= i.top) return AddRect(sink, a);
+  AddRect(sink, D2D1::RectF(a.left, a.top, a.right, i.top));
+  AddRect(sink, D2D1::RectF(a.left, i.bottom, a.right, a.bottom));
+  AddRect(sink, D2D1::RectF(a.left, i.top, i.left, i.bottom));
+  AddRect(sink, D2D1::RectF(i.right, i.top, a.right, i.bottom));
+}
+
+static HRESULT STDMETHODCALLTYPE RectCombine(ID2D1RectangleGeometry *self, ID2D1Geometry *other, D2D1_COMBINE_MODE mode,
+                                             const D2D1_MATRIX_3X2_F *transform, FLOAT tolerance,
+                                             ID2D1SimplifiedGeometrySink *sink) {
+  if (!other || !sink) return E_INVALIDARG;
+  D2D1_RECT_F a;
+  self->GetRect(&a);
+
+  ID2D1RectangleGeometry *other_rect = nullptr;
+  bool axis_aligned = !transform || (transform->_12 == 0.0f && transform->_21 == 0.0f);
+  if (axis_aligned && SUCCEEDED(other->QueryInterface(__uuidof(ID2D1RectangleGeometry), reinterpret_cast<void **>(&other_rect)))) {
+    D2D1_RECT_F b;
+    other_rect->GetRect(&b);
+    other_rect->Release();
+    if (transform) {
+      FLOAT x0 = b.left * transform->_11 + transform->_31, x1 = b.right * transform->_11 + transform->_31;
+      FLOAT y0 = b.top * transform->_22 + transform->_32, y1 = b.bottom * transform->_22 + transform->_32;
+      b = D2D1::RectF(Lo(x0, x1), Lo(y0, y1), Hi(x0, x1), Hi(y0, y1));
+    }
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+    switch (mode) {
+      case D2D1_COMBINE_MODE_UNION:
+        AddRect(sink, a);
+        AddDifference(sink, b, a);
+        break;
+      case D2D1_COMBINE_MODE_INTERSECT:
+        AddRect(sink, D2D1::RectF(Hi(a.left, b.left), Hi(a.top, b.top), Lo(a.right, b.right), Lo(a.bottom, b.bottom)));
+        break;
+      case D2D1_COMBINE_MODE_XOR:
+        AddDifference(sink, a, b);
+        AddDifference(sink, b, a);
+        break;
+      default:
+        AddDifference(sink, a, b);
+        break;
+    }
+    return S_OK;
+  }
+
+  if (mode == D2D1_COMBINE_MODE_INTERSECT)
+    return other->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES, transform, tolerance, sink);
+  HRESULT hr = other->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES, transform, tolerance, sink);
+  sink->SetFillMode(mode == D2D1_COMBINE_MODE_UNION ? D2D1_FILL_MODE_WINDING : D2D1_FILL_MODE_ALTERNATE);
+  AddRect(sink, a);
+  return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE CreateRect(void *factory, const D2D1_RECT_F *rect, ID2D1RectangleGeometry **out) {
+  HRESULT hr = g_orig_create_rect(factory, rect, out);
+  if (SUCCEEDED(hr) && out && *out) {
+    void **table = *reinterpret_cast<void ***>(*out);
+    SwapSlot(table,
+             SlotOf(static_cast<HRESULT (STDMETHODCALLTYPE ID2D1Geometry::*)(ID2D1Geometry *, D2D1_COMBINE_MODE, const D2D1_MATRIX_3X2_F *, FLOAT, ID2D1SimplifiedGeometrySink *) const>(
+                 &ID2D1Geometry::CombineWithGeometry)),
+             reinterpret_cast<void *>(RectCombine), nullptr);
+  }
+  return hr;
+}
+
+#define HOOK_DEVICE(N, FACTORY, DEVICE)                                                                                         \
   {                                                                                                                               \
     auto pm = static_cast<HRESULT (STDMETHODCALLTYPE FACTORY::*)(IDXGIDevice *, DEVICE **)>(&FACTORY::CreateDevice);               \
     SwapSlot(table, SlotOf(pm), reinterpret_cast<void *>(DeviceHook<N>::Call), reinterpret_cast<void **>(&g_orig_device[N]));      \
@@ -212,6 +426,8 @@ static void PatchFactory(IUnknown *factory) {
   HOOK_DEVICE(4, ID2D1Factory5, ID2D1Device4)
   HOOK_DEVICE(5, ID2D1Factory6, ID2D1Device5)
   HOOK_DEVICE(6, ID2D1Factory7, ID2D1Device6)
+  SwapSlot(table, SlotOf(static_cast<HRESULT (STDMETHODCALLTYPE ID2D1Factory::*)(const D2D1_RECT_F *, ID2D1RectangleGeometry **)>(&ID2D1Factory::CreateRectangleGeometry)),
+           reinterpret_cast<void *>(CreateRect), reinterpret_cast<void **>(&g_orig_create_rect));
 }
 
 static FARPROC RealExport(const char *name) {
@@ -247,7 +463,10 @@ HRESULT WINAPI D2D1CreateDeviceContext(IDXGISurface *surface, const D2D1_CREATIO
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *) {
-  if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(inst);
+  if (reason == DLL_PROCESS_ATTACH) {
+    DisableThreadLibraryCalls(inst);
+    InitializeCriticalSection(&g_states_lock);
+  }
   return TRUE;
 }
 
