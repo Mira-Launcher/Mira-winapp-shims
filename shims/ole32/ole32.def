@@ -283,7 +283,7 @@ EXPORTS
   StgOpenPropStg = ole32w.StgOpenPropStg @281
   StgOpenStorage = ole32w.StgOpenStorage @282
   StgOpenStorageEx = ole32w.StgOpenStorageEx @283
-  StgOpenStorageOnILockBytes = ole32w.StgOpenStorageOnILockBytes @284
+  StgOpenStorageOnILockBytes = OpenOnLockBytes @284
   StgSetTimes = ole32w.StgSetTimes @285
   StringFromCLSID = ole32w.StringFromCLSID @286
   StringFromGUID2 = ole32w.StringFromGUID2 @287
