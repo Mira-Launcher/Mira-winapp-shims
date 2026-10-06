@@ -1,0 +1,8 @@
+LIBRARY xmllite.dll
+EXPORTS
+  CreateXmlReader = xmllitew.CreateXmlReader @1
+  CreateXmlReaderInputWithEncodingCodePage = xmllitew.CreateXmlReaderInputWithEncodingCodePage @2
+  CreateXmlReaderInputWithEncodingName = xmllitew.CreateXmlReaderInputWithEncodingName @3
+  CreateXmlWriter @4
+  CreateXmlWriterOutputWithEncodingCodePage = xmllitew.CreateXmlWriterOutputWithEncodingCodePage @5
+  CreateXmlWriterOutputWithEncodingName = xmllitew.CreateXmlWriterOutputWithEncodingName @6

@@ -3,7 +3,7 @@ CXX := x86_64-w64-mingw32-g++
 CFLAGS := -O2 -Wall -Wextra -Wno-cast-function-type
 OUT := build
 
-all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll
+all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll
 
 $(OUT)/sppc.dll: shims/sppc/sppc.c shims/sppc/sppc.def
 	mkdir -p $(OUT)
@@ -20,6 +20,10 @@ $(OUT)/uiautomationcore.dll: shims/uiautomationcore/uiautomationcore.c shims/uia
 $(OUT)/d2d1.dll: shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def
 	mkdir -p $(OUT)
 	$(CXX) -O2 -Wall -Wextra -fno-exceptions -fno-rtti -shared -static -o $@ shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def -lkernel32 -Wl,--entry=DllMain
+
+$(OUT)/xmllite.dll: shims/xmllite/xmllite.c shims/xmllite/xmllite.def
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ shims/xmllite/xmllite.c shims/xmllite/xmllite.def -nostdlib -lkernel32 -Wl,--entry=DllMain
 
 clean:
 	rm -rf $(OUT)
