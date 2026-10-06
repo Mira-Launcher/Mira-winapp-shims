@@ -19,7 +19,7 @@ $(OUT)/uiautomationcore.dll: shims/uiautomationcore/uiautomationcore.c shims/uia
 
 $(OUT)/d2d1.dll: shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def
 	mkdir -p $(OUT)
-	$(CXX) -O2 -Wall -Wextra -fno-exceptions -fno-rtti -shared -static -o $@ shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def -lkernel32 -Wl,--entry=DllMain
+	$(CXX) -O2 -Wall -Wextra -fno-exceptions -fno-rtti -shared -static -o $@ shims/d2d1/d2d1.cpp shims/d2d1/d2d1.def -lkernel32 -luser32 -lgdi32 -Wl,--entry=DllMain
 
 $(OUT)/xmllite.dll: shims/xmllite/xmllite.c shims/xmllite/xmllite.def
 	mkdir -p $(OUT)

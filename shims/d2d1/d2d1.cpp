@@ -18,6 +18,8 @@
 #include <windows.h>
 #include <d2d1_3.h>
 #include <d2d1svg.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
 
 typedef HRESULT(WINAPI *CreateFactoryFn)(D2D1_FACTORY_TYPE, REFIID, const D2D1_FACTORY_OPTIONS *, void **);
 typedef HRESULT(WINAPI *CreateDeviceFn)(IDXGIDevice *, const D2D1_CREATION_PROPERTIES *, ID2D1Device **);
@@ -694,6 +696,127 @@ static void PatchEarly(IUnknown *factory) {
   base->Release();
 }
 
+/* Office draws each panel (grid, ribbon, status bar) into a swap chain on its
+ * own child window. Wine renders those off screen and copies them in at each
+ * present, and its next repaint of the parent paints over them with black
+ * until the panel presents again. So each present goes through GDI into the
+ * window itself instead, where a repaint keeps it. */
+struct Staging {
+  ID3D11Device *device;
+  UINT width, height;
+  DXGI_FORMAT format;
+  ID3D11Texture2D *texture;
+};
+static Staging g_staging[16];
+static UINT g_staging_next;
+
+static ID3D11Texture2D *StagingFor(ID3D11Device *device, const D3D11_TEXTURE2D_DESC &desc) {
+  for (Staging &s : g_staging) {
+    if (s.texture && s.device == device && s.width == desc.Width && s.height == desc.Height && s.format == desc.Format) {
+      return s.texture;
+    }
+  }
+  D3D11_TEXTURE2D_DESC staging = {};
+  staging.Width = desc.Width;
+  staging.Height = desc.Height;
+  staging.MipLevels = 1;
+  staging.ArraySize = 1;
+  staging.Format = desc.Format;
+  staging.SampleDesc.Count = 1;
+  staging.Usage = D3D11_USAGE_STAGING;
+  staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  ID3D11Texture2D *texture = nullptr;
+  if (FAILED(device->CreateTexture2D(&staging, nullptr, &texture))) return nullptr;
+  Staging &slot = g_staging[g_staging_next++ % 16];
+  if (slot.texture) slot.texture->Release();
+  slot = {device, desc.Width, desc.Height, desc.Format, texture};
+  return texture;
+}
+
+static void PresentThroughGdi(IDXGISwapChain *chain) {
+  DXGI_SWAP_CHAIN_DESC desc;
+  if (FAILED(chain->GetDesc(&desc)) || !desc.OutputWindow) return;
+  ID3D11Texture2D *back = nullptr;
+  if (FAILED(chain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&back)))) return;
+  D3D11_TEXTURE2D_DESC td;
+  back->GetDesc(&td);
+  if ((td.Format == DXGI_FORMAT_B8G8R8A8_UNORM || td.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) && td.SampleDesc.Count == 1) {
+    ID3D11Device *device = nullptr;
+    back->GetDevice(&device);
+    ID3D11DeviceContext *context = nullptr;
+    device->GetImmediateContext(&context);
+    if (ID3D11Texture2D *staging = StagingFor(device, td)) {
+      context->CopyResource(staging, back);
+      D3D11_MAPPED_SUBRESOURCE map;
+      if (SUCCEEDED(context->Map(staging, 0, D3D11_MAP_READ, 0, &map))) {
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof bmi.bmiHeader;
+        bmi.bmiHeader.biWidth = static_cast<LONG>(map.RowPitch / 4);
+        bmi.bmiHeader.biHeight = -static_cast<LONG>(td.Height);
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        if (HDC dc = GetDC(desc.OutputWindow)) {
+          SetDIBitsToDevice(dc, 0, 0, td.Width, td.Height, 0, 0, 0, td.Height, map.pData, &bmi, DIB_RGB_COLORS);
+          ReleaseDC(desc.OutputWindow, dc);
+        }
+        context->Unmap(staging, 0);
+      }
+    }
+    context->Release();
+    device->Release();
+  }
+  back->Release();
+}
+
+static HRESULT(STDMETHODCALLTYPE *g_orig_present)(IDXGISwapChain *, UINT, UINT);
+static HRESULT(STDMETHODCALLTYPE *g_orig_present1)(IDXGISwapChain1 *, UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
+static HRESULT(STDMETHODCALLTYPE *g_orig_create_for_hwnd)(IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
+                                                          const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *,
+                                                          IDXGISwapChain1 **);
+
+static HRESULT STDMETHODCALLTYPE ChainPresent(IDXGISwapChain *self, UINT interval, UINT flags) {
+  if (flags & DXGI_PRESENT_TEST) return g_orig_present(self, interval, flags);
+  PresentThroughGdi(self);
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE ChainPresent1(IDXGISwapChain1 *self, UINT interval, UINT flags,
+                                               const DXGI_PRESENT_PARAMETERS *params) {
+  if (flags & DXGI_PRESENT_TEST) return g_orig_present1(self, interval, flags, params);
+  PresentThroughGdi(self);
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE CreateForHwnd(IDXGIFactory2 *self, IUnknown *device, HWND hwnd,
+                                               const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                               const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen, IDXGIOutput *output,
+                                               IDXGISwapChain1 **out) {
+  HRESULT hr = g_orig_create_for_hwnd(self, device, hwnd, desc, fullscreen, output, out);
+  if (SUCCEEDED(hr) && out && *out) {
+    void **table = *reinterpret_cast<void ***>(*out);
+    SwapSlot(table, SlotOf(&IDXGISwapChain::Present), reinterpret_cast<void *>(ChainPresent),
+             reinterpret_cast<void **>(&g_orig_present));
+    SwapSlot(table, SlotOf(&IDXGISwapChain1::Present1), reinterpret_cast<void *>(ChainPresent1),
+             reinterpret_cast<void **>(&g_orig_present1));
+  }
+  return hr;
+}
+
+static void PatchDxgi() {
+  static bool done;
+  if (done) return;
+  done = true;
+  HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+  auto create = dxgi ? reinterpret_cast<HRESULT(WINAPI *)(REFIID, void **)>(GetProcAddress(dxgi, "CreateDXGIFactory1"))
+                     : nullptr;
+  IDXGIFactory2 *factory = nullptr;
+  if (!create || FAILED(create(__uuidof(IDXGIFactory2), reinterpret_cast<void **>(&factory)))) return;
+  SwapSlot(*reinterpret_cast<void ***>(factory), SlotOf(&IDXGIFactory2::CreateSwapChainForHwnd),
+           reinterpret_cast<void *>(CreateForHwnd), reinterpret_cast<void **>(&g_orig_create_for_hwnd));
+  factory->Release();
+}
+
 static FARPROC RealExport(const char *name) {
   static HMODULE real;
   if (!real) real = LoadLibraryW(L"d2d1w.dll");
@@ -709,6 +832,7 @@ HRESULT WINAPI D2D1CreateFactory(D2D1_FACTORY_TYPE type, REFIID riid, const D2D1
   if (SUCCEEDED(hr) && out && *out) {
     PatchFactory(static_cast<IUnknown *>(*out));
     PatchEarly(static_cast<IUnknown *>(*out));
+    PatchDxgi();
   }
   return hr;
 }
