@@ -37,7 +37,7 @@ namespace {
 
 constexpr UINT64 kChunk = 2u << 20;  // bytes a worker asks for at a time
 constexpr int kWorkers = 8;          // parallel keep-alive connections
-constexpr int kAttempts = 5;         // tries per chunk before the job fails
+constexpr DWORD kMaxBackoffMs = 10000;  // longest wait between tries after the network drops
 constexpr DWORD kReadBuffer = 256 * 1024;
 
 // ---------------------------------------------------------------- logging
@@ -327,6 +327,8 @@ struct Transfer {
   volatile LONG failed = 0;
   volatile HRESULT error = S_OK;
   volatile LONG* stop;
+  ULONGLONG give_up_ms = 0;               // how long without a byte before the job fails (the job's no-progress timeout)
+  volatile LONGLONG last_progress = 0;    // tick of the last byte (or the start)
 };
 
 bool CrackUrl(const std::wstring& url, Transfer& t) {
@@ -340,6 +342,20 @@ bool CrackUrl(const std::wstring& url, Transfer& t) {
   t.port = parts.nPort;
   t.secure = parts.nScheme == INTERNET_SCHEME_HTTPS;
   return true;
+}
+
+// Whether a failed request is worth trying again. A refusal the server means (not found, forbidden, a bad range)
+// will not change; anything else (the network dropping, a timeout, a busy server) usually does.
+bool Retryable(HRESULT hr) {
+  for (DWORD status : {400u, 401u, 403u, 404u, 410u, 416u}) {
+    if (hr == HttpStatusError(status)) return false;
+  }
+  return true;
+}
+
+// Waits `ms`, in short steps, until `stop` is set.
+void SleepUnlessStopped(DWORD ms, volatile LONG* stop) {
+  for (DWORD waited = 0; waited < ms && !*stop; waited += 200) Sleep(200);
 }
 
 struct Connection {
@@ -845,6 +861,13 @@ class Job final : public IBackgroundCopyJob4, public IBackgroundCopyJobHttpOptio
     return S_OK;
   }
 
+  // The job is waiting out a network problem (BG_JOB_STATE_TRANSIENT_ERROR) or moving data again.
+  void SetTransient(bool on) {
+    Lock hold(lock_);
+    if (on && state_ == BG_JOB_STATE_TRANSFERRING) state_ = BG_JOB_STATE_TRANSIENT_ERROR;
+    if (!on && state_ == BG_JOB_STATE_TRANSIENT_ERROR) state_ = BG_JOB_STATE_TRANSFERRING;
+  }
+
   void Forget() {
     {
       Lock hold(jobs_lock);
@@ -948,8 +971,14 @@ class Job final : public IBackgroundCopyJob4, public IBackgroundCopyJobHttpOptio
       if (index >= static_cast<LONG>(t->chunks.size())) break;
       const Chunk chunk = t->chunks[index];
       HRESULT hr = E_FAIL;
-      for (int attempt = 0; attempt < kAttempts && !*t->stop; ++attempt) {
-        if (attempt) Sleep(500u << attempt);
+      for (int attempt = 0; !*t->stop && !t->failed; ++attempt) {
+        if (attempt) {
+          // Offline, or the server stumbled: keep trying while it has not been too long since a byte moved.
+          if (static_cast<ULONGLONG>(GetTickCount64() - t->last_progress) > t->give_up_ms) break;
+          t->job->SetTransient(true);
+          SleepUnlessStopped(std::min<DWORD>(500u << std::min(attempt, 5), kMaxBackoffMs), t->stop);
+          if (*t->stop) break;
+        }
         if (!connection.connect && !connection.Open(*t)) {
           hr = HRESULT_FROM_WIN32(GetLastError());
           continue;
@@ -967,17 +996,20 @@ class Job final : public IBackgroundCopyJob4, public IBackgroundCopyJobHttpOptio
                    written += did;
                    InterlockedExchangeAdd64(&t->file->transferred, did);
                    InterlockedExchangeAdd64(&all_done, did);
+                   InterlockedExchange64(&t->last_progress, static_cast<LONGLONG>(GetTickCount64()));
                    PublishProgress();
                    return S_OK;
                  });
         if (SUCCEEDED(hr) && status != 206 && !(status == 200 && chunk.remote == 0)) hr = HttpStatusError(status);
         if (SUCCEEDED(hr) && written != chunk.length) hr = HRESULT_FROM_WIN32(ERROR_WINHTTP_CONNECTION_ERROR);
-        if (SUCCEEDED(hr)) break;
+        if (SUCCEEDED(hr)) {
+          t->job->SetTransient(false);
+          break;
+        }
         InterlockedExchangeAdd64(&t->file->transferred, -static_cast<LONG64>(written));
         InterlockedExchangeAdd64(&all_done, -static_cast<LONG64>(written));
         connection.Close();  // a fresh connection for the retry
-        // A definite refusal will not change on retry.
-        if (hr == HttpStatusError(404) || hr == HttpStatusError(403) || hr == HttpStatusError(416)) break;
+        if (!Retryable(hr)) break;
       }
       if (FAILED(hr)) {
         if (!*t->stop) {
@@ -1003,6 +1035,11 @@ class Job final : public IBackgroundCopyJob4, public IBackgroundCopyJobHttpOptio
     }
     if (!CrackUrl(file->remote, t)) return HRESULT_FROM_WIN32(ERROR_WINHTTP_INVALID_URL);
     file->transferred = 0;
+    {
+      Lock hold(lock_);  // as long as the job's no-progress timeout, but not more than a day
+      t.give_up_ms = static_cast<ULONGLONG>(std::min<ULONG>(no_progress_, 86400)) * 1000;
+    }
+    t.last_progress = static_cast<LONGLONG>(GetTickCount64());
 
     // Probe: one byte, to learn whether ranges work, how big the file is and
     // where redirects end up (so every worker goes straight there).
@@ -1010,10 +1047,26 @@ class Job final : public IBackgroundCopyJob4, public IBackgroundCopyJobHttpOptio
     UINT64 total = 0;
     std::wstring final_url;
     {
-      Connection probe;
-      if (!probe.Open(t)) return HRESULT_FROM_WIN32(GetLastError());
-      Transfer one = t;
-      HRESULT hr = Get(probe, one, 0, 1, &status, &total, [](const char*, DWORD) { return S_OK; }, &final_url);
+      // Offline at the start is no reason to fail: wait for the network, as the transfers themselves do.
+      HRESULT hr = E_FAIL;
+      for (int attempt = 0; !stop_; ++attempt) {
+        if (attempt) {
+          if (static_cast<ULONGLONG>(GetTickCount64() - t.last_progress) > t.give_up_ms) break;
+          SetTransient(true);
+          SleepUnlessStopped(std::min<DWORD>(500u << std::min(attempt, 5), kMaxBackoffMs), &stop_);
+          if (stop_) break;
+        }
+        Connection probe;
+        if (!probe.Open(t)) {
+          hr = HRESULT_FROM_WIN32(GetLastError());
+          continue;
+        }
+        Transfer one = t;
+        hr = Get(probe, one, 0, 1, &status, &total, [](const char*, DWORD) { return S_OK; }, &final_url);
+        if (SUCCEEDED(hr) || !Retryable(hr)) break;
+      }
+      SetTransient(false);
+      if (stop_) return S_OK;
       if (FAILED(hr)) return hr;
     }
     const bool ranged = status == 206;
