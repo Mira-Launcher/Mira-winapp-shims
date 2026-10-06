@@ -558,7 +558,106 @@ static HRESULT STDMETHODCALLTYPE CreateRect(void *factory, const D2D1_RECT_F *re
   return hr;
 }
 
-#define HOOK_DEVICE(N, FACTORY, DEVICE)                                                                                         \
+/* Geometry groups. Wine merges a group's members into one path and works out
+ * where its outlines cross. Two members with an identical curve, as in
+ * Office's tab and button borders (an outline and the same outline 1 px
+ * shorter), make that search split the curves without end: one group took
+ * 40 seconds and froze the window. Lines do not have this problem, so the
+ * members' curves are flattened to lines first. */
+static HRESULT(STDMETHODCALLTYPE *g_orig_create_group)(void *, D2D1_FILL_MODE, ID2D1Geometry **, UINT32, ID2D1GeometryGroup **);
+static HRESULT(STDMETHODCALLTYPE *g_orig_create_path)(void *, ID2D1PathGeometry **);
+
+/* Writes a shape into a path geometry with every curve replaced by lines. */
+class FlattenSink final : public ID2D1SimplifiedGeometrySink {
+ public:
+  explicit FlattenSink(ID2D1GeometrySink *out) : out_(out) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(ID2D1SimplifiedGeometrySink)) {
+      *out = static_cast<ID2D1SimplifiedGeometrySink *>(this);
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+  void STDMETHODCALLTYPE SetFillMode(D2D1_FILL_MODE mode) override { out_->SetFillMode(mode); }
+  void STDMETHODCALLTYPE SetSegmentFlags(D2D1_PATH_SEGMENT flags) override { out_->SetSegmentFlags(flags); }
+  void STDMETHODCALLTYPE BeginFigure(D2D1_POINT_2F p, D2D1_FIGURE_BEGIN begin) override {
+    out_->BeginFigure(p, begin);
+    at_ = p;
+  }
+  void STDMETHODCALLTYPE AddLines(const D2D1_POINT_2F *p, UINT32 n) override {
+    if (!n) return;
+    out_->AddLines(p, n);
+    at_ = p[n - 1];
+  }
+  void STDMETHODCALLTYPE AddBeziers(const D2D1_BEZIER_SEGMENT *b, UINT32 n) override {
+    for (UINT32 i = 0; i < n; i++) Flatten(b[i]);
+  }
+  void STDMETHODCALLTYPE EndFigure(D2D1_FIGURE_END end) override { out_->EndFigure(end); }
+  HRESULT STDMETHODCALLTYPE Close() override { return S_OK; }
+
+ private:
+  /* Enough lines to stay within kTolerance of the curve (Wang's formula). */
+  void Flatten(const D2D1_BEZIER_SEGMENT &b) {
+    const FLOAT kTolerance = 0.05f;
+    D2D1_POINT_2F p0 = at_, p1 = b.point1, p2 = b.point2, p3 = b.point3;
+    FLOAT ax = p0.x - 2 * p1.x + p2.x, ay = p0.y - 2 * p1.y + p2.y;
+    FLOAT bx = p1.x - 2 * p2.x + p3.x, by = p1.y - 2 * p2.y + p3.y;
+    FLOAT m = Hi(ax * ax + ay * ay, bx * bx + by * by);
+    int n = 1;
+    while (n < 64 && (FLOAT)n * n * n * n * kTolerance * kTolerance < 0.5625f * m) n++;
+    D2D1_POINT_2F points[64];
+    for (int i = 1; i <= n; i++) {
+      FLOAT t = (FLOAT)i / n, u = 1 - t;
+      FLOAT c0 = u * u * u, c1 = 3 * u * u * t, c2 = 3 * u * t * t, c3 = t * t * t;
+      points[i - 1] = D2D1::Point2F(c0 * p0.x + c1 * p1.x + c2 * p2.x + c3 * p3.x, c0 * p0.y + c1 * p1.y + c2 * p2.y + c3 * p3.y);
+    }
+    points[n - 1] = p3;
+    out_->AddLines(points, n);
+    at_ = p3;
+  }
+
+  ID2D1GeometrySink *out_;
+  D2D1_POINT_2F at_ = {0, 0};
+};
+
+/* A path holding `geometry` with its curves as lines, or null. */
+static ID2D1Geometry *Flattened(void *factory, ID2D1Geometry *geometry) {
+  ID2D1PathGeometry *path = nullptr;
+  if (FAILED(g_orig_create_path(factory, &path))) return nullptr;
+  ID2D1GeometrySink *sink = nullptr;
+  HRESULT hr = path->Open(&sink);
+  if (SUCCEEDED(hr)) {
+    FlattenSink flatten(sink);
+    hr = geometry->Simplify(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES, nullptr, 0.05f, &flatten);
+    HRESULT closed = sink->Close();
+    if (SUCCEEDED(hr)) hr = closed;
+    sink->Release();
+  }
+  if (FAILED(hr)) {
+    path->Release();
+    return nullptr;
+  }
+  return path;
+}
+
+static HRESULT STDMETHODCALLTYPE CreateGroup(void *factory, D2D1_FILL_MODE mode, ID2D1Geometry **geometries, UINT32 count,
+                                             ID2D1GeometryGroup **out) {
+  if (!geometries || !count || count > 256 || !g_orig_create_path) return g_orig_create_group(factory, mode, geometries, count, out);
+  ID2D1Geometry *flat[256];
+  UINT32 made = 0;
+  for (; made < count; made++)
+    if (!(flat[made] = Flattened(factory, geometries[made]))) break;
+  HRESULT hr = made == count ? g_orig_create_group(factory, mode, flat, count, out)
+                             : g_orig_create_group(factory, mode, geometries, count, out);
+  for (UINT32 i = 0; i < made; i++) flat[i]->Release();
+  return hr;
+}
+
+#define HOOK_DEVICE(N, FACTORY, DEVICE)                                                                                        \
   {                                                                                                                               \
     auto pm = static_cast<HRESULT (STDMETHODCALLTYPE FACTORY::*)(IDXGIDevice *, DEVICE **)>(&FACTORY::CreateDevice);               \
     SwapSlot(table, SlotOf(pm), reinterpret_cast<void *>(DeviceHook<N>::Call), reinterpret_cast<void **>(&g_orig_device[N]));      \
@@ -576,6 +675,23 @@ static void PatchFactory(IUnknown *factory) {
   HOOK_DEVICE(6, ID2D1Factory7, ID2D1Device6)
   SwapSlot(table, SlotOf(static_cast<HRESULT (STDMETHODCALLTYPE ID2D1Factory::*)(const D2D1_RECT_F *, ID2D1RectangleGeometry **)>(&ID2D1Factory::CreateRectangleGeometry)),
            reinterpret_cast<void *>(CreateRect), reinterpret_cast<void **>(&g_orig_create_rect));
+  g_orig_create_path = reinterpret_cast<decltype(g_orig_create_path)>(table[SlotOf(&ID2D1Factory::CreatePathGeometry)]);
+  SwapSlot(table, SlotOf(&ID2D1Factory::CreateGeometryGroup), reinterpret_cast<void *>(CreateGroup),
+           reinterpret_cast<void **>(&g_orig_create_group));
+}
+
+/* Rectangle geometries share one method table, patched when Office first
+ * creates one through the factory. Create one here so the CombineWithGeometry
+ * fix is in place before Office draws anything. */
+static void PatchEarly(IUnknown *factory) {
+  static LONG done;
+  if (InterlockedCompareExchange(&done, 1, 0)) return;
+  ID2D1Factory *base = nullptr;
+  if (FAILED(factory->QueryInterface(__uuidof(ID2D1Factory), reinterpret_cast<void **>(&base)))) return;
+  ID2D1RectangleGeometry *rect = nullptr;
+  D2D1_RECT_F r = D2D1::RectF(0, 0, 1, 1);
+  if (SUCCEEDED(base->CreateRectangleGeometry(&r, &rect))) rect->Release();
+  base->Release();
 }
 
 static FARPROC RealExport(const char *name) {
@@ -590,7 +706,10 @@ HRESULT WINAPI D2D1CreateFactory(D2D1_FACTORY_TYPE type, REFIID riid, const D2D1
   auto fn = reinterpret_cast<CreateFactoryFn>(RealExport("D2D1CreateFactory"));
   if (!fn) return E_FAIL;
   HRESULT hr = fn(type, riid, options, out);
-  if (SUCCEEDED(hr) && out && *out) PatchFactory(static_cast<IUnknown *>(*out));
+  if (SUCCEEDED(hr) && out && *out) {
+    PatchFactory(static_cast<IUnknown *>(*out));
+    PatchEarly(static_cast<IUnknown *>(*out));
+  }
   return hr;
 }
 
