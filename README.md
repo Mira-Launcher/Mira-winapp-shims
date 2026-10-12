@@ -1,6 +1,6 @@
 # mira-winapp-shims
 
-Clean-room shim DLLs and registry settings that let Windows-only apps (Microsoft 365 first, Adobe Creative Cloud and Autodesk later. Other apps may be added as needed) install and run on stock GE-Proton. Used by [Mira](https://github.com/Mira-Launcher/Mira).
+Clean-room shim DLLs and registry settings that let Windows-only apps (Microsoft 365 first, Adobe Creative Cloud and Autodesk later. Other apps may be added as needed) install and run on stock GE-Proton. Used by [Mira](https://github.com/Mira-Launcher/Mira) could also be used separately.
 
 ## Layout
 
