@@ -1,0 +1,4 @@
+LIBRARY resprotocol
+EXPORTS
+  DllCanUnloadNow PRIVATE
+  DllGetClassObject PRIVATE
