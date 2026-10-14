@@ -10,8 +10,10 @@ static const CLSID CLSID_ResProtocol = {0x3050f3bc, 0x98b5, 0x11cf, {0xbb, 0x82,
 /* {6D1E4C5A-3F0B-4E5C-9A7E-4D2B1C8F0A11} */
 static const CLSID CLSID_MiraResProtocol = {0x6d1e4c5a, 0x3f0b, 0x4e5c, {0x9a, 0x7e, 0x4d, 0x2b, 0x1c, 0x8f, 0x0a, 0x11}};
 
-static BOOL IsRes(LPCWSTR url) {
-  return url && (url[0] | 0x20) == 'r' && (url[1] | 0x20) == 'e' && (url[2] | 0x20) == 's' && url[3] == ':';
+// A res: URL with no module, like res:///name/$10/$RCDATA: the only kind Wine fails to map.
+static BOOL IsModulelessRes(LPCWSTR url) {
+  return url && (url[0] | 0x20) == 'r' && (url[1] | 0x20) == 'e' && (url[2] | 0x20) == 's' && url[3] == ':' &&
+         url[4] == '/' && url[5] == '/' && url[6] == '/';
 }
 
 static void Copy(WCHAR *to, const WCHAR *from, DWORD count) {
@@ -87,7 +89,7 @@ static HRESULT WINAPI Info_ParseUrl(IInternetProtocolInfo *self, LPCWSTR url, PA
   IInternetProtocolInfo *info = WineInfo();
   HRESULT hr = info ? IInternetProtocolInfo_ParseUrl(info, url, action, flags, result, size, needed, reserved)
                     : INET_E_DEFAULT_ACTION;
-  if (action != PARSE_SECURITY_URL || SUCCEEDED(hr) || !IsRes(url)) return hr;
+  if (action != PARSE_SECURITY_URL || SUCCEEDED(hr) || !IsModulelessRes(url)) return hr;
   WCHAR exe[MAX_PATH];
   DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
   if (!len || len >= MAX_PATH) return hr;

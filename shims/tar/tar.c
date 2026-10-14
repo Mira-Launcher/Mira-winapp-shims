@@ -24,7 +24,7 @@ static wchar_t *Wide(const char *s) {
 
 // Creates every folder above `path` (a file path, or a folder path ending in a slash).
 static void MakeParents(wchar_t *path) {
-  for (wchar_t *p = path + 3; *p; ++p) {
+  for (wchar_t *p = path + 1; *p; ++p) {  // creating C: or an existing folder just fails
     if (*p != L'\\') continue;
     *p = 0;
     CreateDirectoryW(path, NULL);
@@ -47,7 +47,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!wcscmp(a, L"--keep-newer-files")) {
       keep_newer = 1;
     } else if (!wcscmp(a, L"-C") && i + 1 < argc) {
-      dir = argv[++i];
+      dir = argv[++i][0] ? argv[i] : L".";
     } else if (a[0] == L'-' && a[1] != L'-') {
       // Bundled short flags, as in -xf FILE or -xvf FILE.
       for (const wchar_t *f = a + 1; *f; ++f) {
@@ -81,8 +81,9 @@ int wmain(int argc, wchar_t **argv) {
       if (*p == L'/') *p = L'\\';
     }
     // An absolute or parent-relative entry would write outside DIR.
-    if (name[0] == L'\\' || (name[0] && name[1] == L':') || wcsstr(name, L"..\\") || !wcscmp(name, L"..")) {
+    if (!name[0] || name[0] == L'\\' || (name[0] && name[1] == L':') || wcsstr(name, L"..\\") || !wcscmp(name, L"..")) {
       fwprintf(stderr, L"tar: skipping unsafe path %ls\n", name);
+      failed = 1;
       free(name);
       continue;
     }
