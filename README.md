@@ -8,6 +8,7 @@ Clean-room shim DLLs and registry settings that let Windows-only apps (Microsoft
 - `shims/qmgr/` a BITS service that downloads over parallel keep-alive HTTP connections and takes file ranges (Wine's cannot, so Office's Click-to-Run falls back to a slow transport). Written from the public BITS interfaces.
 - `shims/wintrust/` checks AppX/MSIX signatures at their timestamp, as Windows does, and loads binary registry hives for RegLoadAppKeyW/RegLoadKeyW, which Wine can't. Autodesk's installer needs both.
 - `shims/bcryptprimitives/` reports services.exe in session 0, as Windows does, so Go programs (Autodesk's CER service) know they run as a service.
+- `shims/sma/` a System.Management.Automation for Wine's .NET that runs a hosted PowerShell script with PowerShell 7 (pwsh.exe), so PS2EXE-wrapped scripts (Autodesk Revit's installer steps) run. Built with the .NET SDK.
 - `tests/` `rangesrv.py` (a range-capable HTTP server) and `bitsclient.c` (a BITS client) to check qmgr under Wine
 - `reg/` registry files applied to the prefix before the installer runs
 

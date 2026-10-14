@@ -1,2 +1,4 @@
 build/
 NOTES.md
+shims/sma/obj/
+shims/sma/bin/

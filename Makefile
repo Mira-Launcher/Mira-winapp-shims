@@ -3,7 +3,7 @@ CXX := x86_64-w64-mingw32-g++
 CFLAGS := -O2 -Wall -Wextra -Wno-cast-function-type
 OUT := build
 
-all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll $(OUT)/qmgr.dll $(OUT)/wintrust.dll $(OUT)/bcryptprimitives.dll
+all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll $(OUT)/qmgr.dll $(OUT)/wintrust.dll $(OUT)/bcryptprimitives.dll $(OUT)/System.Management.Automation.dll
 
 $(OUT)/sppc.dll: shims/sppc/sppc.c shims/sppc/sppc.def
 	mkdir -p $(OUT)
@@ -36,6 +36,12 @@ $(OUT)/wintrust.dll: shims/wintrust/wintrust.c shims/wintrust/regload.c shims/wi
 $(OUT)/bcryptprimitives.dll: shims/bcryptprimitives/bcryptprimitives.c shims/bcryptprimitives/bcryptprimitives.def
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ shims/bcryptprimitives/bcryptprimitives.c shims/bcryptprimitives/bcryptprimitives.def -nostdlib -lkernel32 -Wl,--entry=DllMain
+
+# Needs the .NET SDK (dotnet).
+$(OUT)/System.Management.Automation.dll: shims/sma/sma.csproj shims/sma/Host.cs shims/sma/Engine.cs shims/sma/msft.pub
+	mkdir -p $(OUT)
+	dotnet build shims/sma/sma.csproj -c Release -o $(OUT)/sma
+	cp $(OUT)/sma/System.Management.Automation.dll $@
 
 clean:
 	rm -rf $(OUT)
