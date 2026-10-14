@@ -3,7 +3,7 @@ CXX := x86_64-w64-mingw32-g++
 CFLAGS := -O2 -Wall -Wextra -Wno-cast-function-type
 OUT := build
 
-all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll $(OUT)/qmgr.dll $(OUT)/wintrust.dll $(OUT)/bcryptprimitives.dll $(OUT)/resprotocol.dll $(OUT)/tar.exe $(OUT)/System.Management.Automation.dll
+all: $(OUT)/sppc.dll $(OUT)/ole32.dll $(OUT)/uiautomationcore.dll $(OUT)/d2d1.dll $(OUT)/xmllite.dll $(OUT)/qmgr.dll $(OUT)/wintrust.dll $(OUT)/bcryptprimitives.dll $(OUT)/resprotocol.dll $(OUT)/ncrypt.dll $(OUT)/tar.exe $(OUT)/System.Management.Automation.dll
 
 $(OUT)/sppc.dll: shims/sppc/sppc.c shims/sppc/sppc.def
 	mkdir -p $(OUT)
@@ -40,6 +40,10 @@ $(OUT)/bcryptprimitives.dll: shims/bcryptprimitives/bcryptprimitives.c shims/bcr
 $(OUT)/resprotocol.dll: shims/resprotocol/resprotocol.c shims/resprotocol/resprotocol.def
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fno-tree-loop-distribute-patterns -shared -o $@ shims/resprotocol/resprotocol.c shims/resprotocol/resprotocol.def -nostdlib -lkernel32 -lole32 -luuid -lntdll -Wl,--entry=DllMain
+
+$(OUT)/ncrypt.dll: shims/ncrypt/ncrypt.c shims/ncrypt/ncrypt.def
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ shims/ncrypt/ncrypt.c shims/ncrypt/ncrypt.def -nostdlib -lkernel32 -lbcrypt -Wl,--entry=DllMain
 
 $(OUT)/tar.exe: shims/tar/tar.c shims/tar/miniz.c shims/tar/miniz.h
 	mkdir -p $(OUT)
